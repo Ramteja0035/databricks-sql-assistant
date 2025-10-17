@@ -3,17 +3,17 @@ import os
 import re
 import mlflow
 import mlflow.pyfunc
+
 warehouseid = "147e835ee9c3308d"
+
 try:
     from openai import OpenAI
 except ImportError:
     os.system("pip install openai")
     from openai import OpenAI
 
-# Initialize Spark
 spark = SparkSession.builder.getOrCreate()
 
-# Define table names and schemas
 tables = {
     "customers": "hive_metastore.default.customers",
     "online_sales": "hive_metastore.default.online_sales",
@@ -26,7 +26,6 @@ def get_table_schema(table_path):
 
 schemas = {name: get_table_schema(path) for name, path in tables.items()}
 
-# Construct the system prompt
 system_prompt = "You are an AI SQL assistant. Only respond to questions related to the following tables.\n\n"
 for name in tables:
     system_prompt += f"Table `{name}` schema: {schemas[name]}\n"
@@ -37,16 +36,14 @@ system_prompt += (
     "Just print sql query in one line dont add the name sql and dont return the output with `` exlcue it."
 )
 
-# Get Databricks token
 DATABRICKS_TOKEN = dbutils.notebook.entry_point.getDbutils().notebook().getContext().apiToken().get()
 
-# ✅ Define the dynamic SQL + SQL Execution model
 class SQLAssistantModel(mlflow.pyfunc.PythonModel):
     def __init__(self, token, system_prompt):
         self.token = token
         self.system_prompt = system_prompt
         self.sql_api_url = "https://adb-2856773811930092.12.azuredatabricks.net/api/2.0/sql/statements/"
-        self.sql_warehouse_id = warehouseid  # 🔁 Replace this with your actual warehouse ID
+        self.sql_warehouse_id = warehouseid
 
     def load_context(self, context):
         self.client = OpenAI(
@@ -72,12 +69,9 @@ class SQLAssistantModel(mlflow.pyfunc.PythonModel):
 
     def predict(self, context, model_input):
         import pandas as pd
-
         if isinstance(model_input, dict):
             model_input = pd.DataFrame.from_dict(model_input)
-
         results = []
-
         for question in model_input.iloc[:, 0]:
             try:
                 response = self.client.chat.completions.create(
@@ -88,7 +82,6 @@ class SQLAssistantModel(mlflow.pyfunc.PythonModel):
                     ]
                 )
                 predicted_sql = response.choices[0].message.content.strip()
-
                 if predicted_sql.lower() == "out of my scope":
                     results.append({
                         "status": "out_of_scope",
@@ -97,28 +90,24 @@ class SQLAssistantModel(mlflow.pyfunc.PythonModel):
                     })
                 else:
                     execution_result = self.execute_sql(predicted_sql)
-                    rows=execution_result.get("result",{}).get("data_array",[])
+                    rows = execution_result.get("result", {}).get("data_array", [])
                     results.append({
                         "status": "Query and Result will be shown",
                         "query": predicted_sql,
                         "result": rows
                     })
-
             except Exception as e:
                 results.append({
                     "status": "Error",
                     "query": None,
                     "result": str(e)
                 })
-
         return results
 
-# ✅ MLflow Logging (same as before)
 mlflow.set_experiment("/Users/2730707@tcsteg.onmicrosoft.com/Exper")
 
 with mlflow.start_run():
     mlflow.set_tag("task", "sql_generation_with_execution")
-
     mlflow.pyfunc.log_model(
         artifact_path="model",
         python_model=SQLAssistantModel(DATABRICKS_TOKEN, system_prompt)
