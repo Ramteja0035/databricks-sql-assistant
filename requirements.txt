@@ -1,0 +1,5 @@
+pyspark
+mlflow
+openai
+pandas
+requests
